@@ -1,4 +1,8 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+
 import 'package:shopping_list/data/categories.dart';
 import 'package:shopping_list/models/category.dart';
 import 'package:shopping_list/models/grocery_item.dart';
@@ -7,34 +11,80 @@ class NewItem extends StatefulWidget {
   const NewItem({super.key});
 
   @override
-  State<NewItem> createState() => _NewItemState();
+  State<NewItem> createState() {
+    return _NewItemState();
+  }
 }
 
 class _NewItemState extends State<NewItem> {
   final _formKey = GlobalKey<FormState>();
   var _enteredName = '';
-  var _enterdQuantity = 1;
+  var _enteredQuantity = 1;
   var _selectedCategory = categories[Categories.vegetables]!;
+  var _isSending = false;
 
-  void _saveItem() {
-    if (!_formKey.currentState!.validate()) {
-      return;
-    }
+  void _saveItem() async {
+    if (!_formKey.currentState!.validate()) return;
+
     _formKey.currentState!.save();
-    Navigator.of(context).pop(
-      GroceryItem(
-        id: DateTime.now().toString(),
-        name: _enteredName,
-        quantity: _enterdQuantity,
-        category: _selectedCategory,
-      ),
+    setState(() {
+      _isSending = true;
+    });
+
+    final url = Uri.https(
+      'flutter-prep-fa52a-default-rtdb.firebaseio.com',
+      'shopping-list.json',
     );
+
+    try {
+      final response = await http.post(
+        url,
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode({
+          'name': _enteredName,
+          'quantity': _enteredQuantity,
+          'category': _selectedCategory.title,
+        }),
+      );
+
+      // 1. Check if the server request actually succeeded
+      if (response.statusCode >= 400) {
+        throw Exception('Failed to save data to the server.');
+      }
+
+      final Map<String, dynamic>? resData = json.decode(response.body);
+
+      // 2. Ensure context is still valid before navigating
+      if (!context.mounted) return;
+
+      // 3. Fallback to a placeholder string if Firebase 'name' is somehow null
+      final generatedId = resData?['name'] ?? DateTime.now().toString();
+
+      Navigator.of(context).pop(
+        GroceryItem(
+          id: generatedId,
+          name: _enteredName,
+          quantity: _enteredQuantity,
+          category: _selectedCategory,
+        ),
+      );
+    } catch (error) {
+      // 4. Handle errors and reset the loading spinner
+      setState(() {
+        _isSending = false;
+      });
+
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Something went wrong: $error')));
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Add new item')),
+      appBar: AppBar(title: const Text('Add a new item')),
       body: Padding(
         padding: const EdgeInsets.all(12),
         child: Form(
@@ -49,39 +99,45 @@ class _NewItemState extends State<NewItem> {
                       value.isEmpty ||
                       value.trim().length <= 1 ||
                       value.trim().length > 50) {
-                    return 'Name field must be between 2 and 5 charecters';
+                    return 'Must be between 1 and 50 characters.';
                   }
                   return null;
                 },
-                onSaved: (newValue) => _enteredName = newValue!,
-              ),
+                onSaved: (value) {
+                  // if (value == null) {
+                  //   return;
+                  // }
+                  _enteredName = value!;
+                },
+              ), // instead of TextField()
               Row(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
                   Expanded(
                     child: TextFormField(
-                      keyboardType: TextInputType.number,
                       decoration: const InputDecoration(
                         label: Text('Quantity'),
                       ),
-                      initialValue: _enterdQuantity.toString(),
+                      keyboardType: TextInputType.number,
+                      initialValue: _enteredQuantity.toString(),
                       validator: (value) {
                         if (value == null ||
                             value.isEmpty ||
                             int.tryParse(value) == null ||
                             int.tryParse(value)! <= 0) {
-                          return 'Quantity must be valid, positive number';
+                          return 'Must be a valid, positive number.';
                         }
                         return null;
                       },
-                      onSaved: (newValue) =>
-                          _enterdQuantity = int.tryParse(newValue!)!,
+                      onSaved: (value) {
+                        _enteredQuantity = int.parse(value!);
+                      },
                     ),
                   ),
-                  SizedBox(width: 8),
+                  const SizedBox(width: 8),
                   Expanded(
                     child: DropdownButtonFormField(
-                      initialValue: _selectedCategory,
+                      value: _selectedCategory,
                       items: [
                         for (final category in categories.entries)
                           DropdownMenuItem(
@@ -89,8 +145,8 @@ class _NewItemState extends State<NewItem> {
                             child: Row(
                               children: [
                                 Container(
-                                  width: 15,
-                                  height: 15,
+                                  width: 16,
+                                  height: 16,
                                   color: category.value.color,
                                 ),
                                 const SizedBox(width: 6),
@@ -113,15 +169,22 @@ class _NewItemState extends State<NewItem> {
                 mainAxisAlignment: MainAxisAlignment.end,
                 children: [
                   TextButton(
-                    onPressed: () {
-                      _formKey.currentState!.reset();
-                    },
+                    onPressed: _isSending
+                        ? null
+                        : () {
+                            _formKey.currentState!.reset();
+                          },
                     child: const Text('Reset'),
                   ),
-                  const SizedBox(width: 8),
                   ElevatedButton(
-                    onPressed: _saveItem,
-                    child: const Text('Add Item'),
+                    onPressed: _isSending ? null : _saveItem,
+                    child: _isSending
+                        ? const SizedBox(
+                            height: 16,
+                            width: 16,
+                            child: CircularProgressIndicator(),
+                          )
+                        : const Text('Add Item'),
                   ),
                 ],
               ),
